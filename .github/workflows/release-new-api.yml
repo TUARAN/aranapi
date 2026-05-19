@@ -197,13 +197,12 @@ jobs:
 
       - name: Publish GitHub Release (manual)
         if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ inputs.release_tag }}
-        run: |
-          set -euo pipefail
-          gh release create "${TAG}" dist/*.tar.gz dist/SHA256SUMS.txt \
-            --repo "${GH_REPO}" \
-            --title "${TAG} (upstream ${{ needs.resolve.outputs.upstream_ref }})" \
-            --notes-file RELEASE_SNIPPET.md
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: ${{ inputs.release_tag }} (upstream ${{ needs.resolve.outputs.upstream_ref }})
+          body_path: RELEASE_SNIPPET.md
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
