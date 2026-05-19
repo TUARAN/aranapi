@@ -1,0 +1,43 @@
+# HTTPS reverse proxy in front of New API (public VPS with DNS pointing here).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Prerequisites:
+#   - DNS A/AAAA for ${CADDY_DOMAIN} → this machine’s public IP
+#   - Ports 80/443 reachable from the internet (for ACME)
+#
+# Recommended: restrict direct access to New API:
+#   NEW_API_PORT_MAPPING=127.0.0.1:3000:3000
+
+name: aranapi
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: new-api-caddy
+    restart: unless-stopped
+    ports:
+      - "${CADDY_PUBLISH_HTTP:-0.0.0.0}:80:80"
+      - "${CADDY_PUBLISH_HTTPS:-0.0.0.0}:443:443"
+      - "${CADDY_PUBLISH_HTTPS:-0.0.0.0}:443:443/udp"
+    environment:
+      DOMAIN: ${CADDY_DOMAIN:?Set CADDY_DOMAIN e.g. api.example.com}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      new-api:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    external: true
+    name: aranapi_internal

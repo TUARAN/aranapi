@@ -1,0 +1,17 @@
+# Bare-metal / systemd deployment: TLS terminates on this host, upstream is local New API.
+#
+# Run with environment variable DOMAIN, for example:
+#   sudo DOMAIN=api.example.com caddy run --config deploy/Caddyfile.baremetal --adapter caddyfile
+#
+# Or use a systemd drop-in / EnvironmentFile for DOMAIN.
+
+{env.DOMAIN} {
+	encode gzip zstd
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	reverse_proxy 127.0.0.1:3000
+}

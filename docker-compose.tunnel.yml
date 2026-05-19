@@ -1,0 +1,31 @@
+# Cloudflare Tunnel connector (TLS terminates at Cloudflare).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+#
+# In Zero Trust → Networks → Tunnels → Public hostname, set origin to:
+#   http://new-api:3000
+# (Recommended: bind New API to loopback only via NEW_API_PORT_MAPPING=127.0.0.1:3000:3000.)
+#
+# Issue a Tunnel token and put it in CLOUDFLARE_TUNNEL_TOKEN.
+
+name: aranapi
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: new-api-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN from Zero Trust}
+    depends_on:
+      new-api:
+        condition: service_healthy
+    networks:
+      - internal
+
+networks:
+  internal:
+    external: true
+    name: aranapi_internal

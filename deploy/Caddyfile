@@ -1,0 +1,13 @@
+# Requires env DOMAIN (set via docker-compose.caddy.yml → CADDY_DOMAIN).
+# Terminates TLS on the host (Let's Encrypt HTTP-01). Proxies to New API.
+
+{env.DOMAIN} {
+	encode gzip zstd
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	reverse_proxy new-api:3000
+}

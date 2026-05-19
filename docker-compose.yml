@@ -1,0 +1,46 @@
+# New API — minimal stack (SQLite under ./data).
+# Docs: https://docs.newapi.pro/en/docs/installation
+#
+# Start:  cp .env.example .env   &&   docker compose up -d
+# UI:     http://localhost:<host-port>  (see NEW_API_PORT_MAPPING; change default admin password immediately)
+
+name: aranapi
+
+networks:
+  internal:
+    driver: bridge
+
+services:
+  new-api:
+    image: calciumion/new-api:latest
+    container_name: new-api
+    restart: unless-stopped
+    command: ["--log-dir", "/app/logs"]
+    ports:
+      # Examples: 3000:3000 | 127.0.0.1:3000:3000 (recommended when exposing only via Caddy/Tunnel on same host)
+      - "${NEW_API_PORT_MAPPING:-3000:3000}"
+    volumes:
+      - ./data:/data
+      - ./logs:/app/logs
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      ERROR_LOG_ENABLED: ${ERROR_LOG_ENABLED:-true}
+      BATCH_UPDATE_ENABLED: ${BATCH_UPDATE_ENABLED:-true}
+      NODE_NAME: ${NODE_NAME:-new-api-node-1}
+      # Single-node SQLite: do not set SQL_DSN or REDIS_CONN_STRING.
+      # Multi-node / Redis / external DB: see .env.example and docker-compose.postgres.yml.
+
+      # Optional strong secrets (recommended if you scale out or enable Redis):
+      # SESSION_SECRET: ${SESSION_SECRET:-}
+      # CRYPTO_SECRET: ${CRYPTO_SECRET:-}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O - http://localhost:3000/api/status | grep -o '\"success\":\\s*true' || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - internal

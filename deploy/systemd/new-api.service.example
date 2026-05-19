@@ -1,0 +1,27 @@
+[Unit]
+Description=New API (LLM gateway)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=newapi
+Group=newapi
+WorkingDirectory=/opt/new-api
+
+# Put production env vars here (chmod 600). See deploy/env.new-api.systemd.example
+EnvironmentFile=/etc/new-api.env
+
+# SQLite default often lives under WorkingDirectory or path from SQL_DSN; ensure writable dirs:
+ReadWritePaths=/opt/new-api /var/lib/new-api /var/log/new-api
+
+ExecStart=/opt/new-api/new-api --log-dir /var/log/new-api
+Restart=on-failure
+RestartSec=3
+
+# Hardening (adjust if upstream requires extra paths)
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

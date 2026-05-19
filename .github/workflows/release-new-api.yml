@@ -1,0 +1,207 @@
+name: release-new-api
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "QuantumNous/new-api tag/commit (empty = use release/upstream-ref.txt; value `latest` = newest GitHub Release tag)"
+        required: false
+        default: ""
+      publish_release:
+        description: "Create/update GitHub Release (workflow_dispatch only; uses release_tag)"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag name e.g. v1.0.0 (required when publish_release is true)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-new-api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_ref: ${{ steps.resolve.outputs.upstream_ref }}
+      safe_ref: ${{ steps.resolve.outputs.safe_ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve upstream ref
+        id: resolve
+        env:
+          INPUT_REF: ${{ inputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          REF=""
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_REF}" ]; then
+            REF="${INPUT_REF}"
+          else
+            REF="$(tr -d ' \n\r\t' < release/upstream-ref.txt)"
+          fi
+
+          if [ -z "${REF}" ] || [ "${REF}" = "latest" ]; then
+            REF="$(curl -fsSL https://api.github.com/repos/QuantumNous/new-api/releases/latest | jq -r .tag_name)"
+          fi
+
+          if [ -z "${REF}" ] || [ "${REF}" = "null" ]; then
+            echo "Failed to resolve upstream ref" >&2
+            exit 1
+          fi
+
+          SAFE="$(echo "${REF}" | sed 's/[^A-Za-z0-9._-]/_/g')"
+          echo "Using upstream ref: ${REF} (safe: ${SAFE})"
+          echo "upstream_ref=${REF}" >> "${GITHUB_OUTPUT}"
+          echo "safe_ref=${SAFE}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+
+    steps:
+      - name: Clone QuantumNous/new-api
+        run: |
+          set -euo pipefail
+          git clone https://github.com/QuantumNous/new-api.git upstream-tmp
+          cd upstream-tmp
+          git checkout "${{ needs.resolve.outputs.upstream_ref }}"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build frontends
+        working-directory: upstream-tmp
+        run: make build-all-frontends
+
+      - name: Build Go binary (pure Go SQLite / CGO off)
+        working-directory: upstream-tmp
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags="-s -w" -o new-api .
+
+      - name: Package tarball
+        id: pack
+        env:
+          SAFE_REF: ${{ needs.resolve.outputs.safe_ref }}
+          UPSTREAM_REF: ${{ needs.resolve.outputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          NAME="new-api_${SAFE_REF}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+          cd upstream-tmp
+          tar -czvf "${GITHUB_WORKSPACE}/${NAME}" new-api LICENSE README.md
+          echo "bundle=${NAME}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ github.workspace }}/new-api_*.tar.gz
+
+  checksums:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          merge-multiple: true
+          path: dist
+
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -la
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: dist/SHA256SUMS.txt
+
+  release:
+    needs: [resolve, build, checksums]
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+      || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
+    steps:
+      - name: Validate manual release inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test -n "${TAG}" || (echo "release_tag is required when publish_release=true" >&2; exit 1)
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: dist
+
+      - name: Write release notes snippet
+        env:
+          UPSTREAM_REF: ${{ needs.resolve.outputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          cat > "${GITHUB_WORKSPACE}/RELEASE_SNIPPET.md" <<EOF
+          Bundled upstream: [\`${UPSTREAM_REF}\`](https://github.com/QuantumNous/new-api/tree/${UPSTREAM_REF})
+
+          Artifacts:
+          - \`new-api_<ref>_<os>_<arch>.tar.gz\` contains \`new-api\` binary plus upstream \`LICENSE\` / \`README.md\`.
+          - Verify with \`SHA256SUMS.txt\`.
+
+          **License**: New API is AGPLv3 (see tarball \`LICENSE\`). Ensure compliance before redistribution.
+          EOF
+
+      - name: Publish GitHub Release (tag push)
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }} (upstream ${{ needs.resolve.outputs.upstream_ref }})
+          body_path: RELEASE_SNIPPET.md
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+
+      - name: Publish GitHub Release (manual)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" dist/*.tar.gz dist/SHA256SUMS.txt \
+            --title "${TAG} (upstream ${{ needs.resolve.outputs.upstream_ref }})" \
+            --notes-file RELEASE_SNIPPET.md
